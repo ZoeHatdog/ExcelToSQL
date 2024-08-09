@@ -1,0 +1,68 @@
+import pandas as pd
+from sqlalchemy import create_engine
+import msoffcrypto
+import io
+
+def decrypt_excel(file_path, password):
+    # Decrypt the Excel file
+    with open(file_path, 'rb') as file:
+        decrypted = io.BytesIO()
+        office_file = msoffcrypto.OfficeFile(file)
+        office_file.load_key(password=password)
+        office_file.decrypt(decrypted)
+    return decrypted
+
+def escape_sql_value(value):
+    if isinstance(value, str):
+        return value.replace("'", "''")  # Escape single quotes
+    return value
+
+def excel_to_sql(excel_file, sheet_name, table_name, output_sql_file, row_range, column_range, password=None):
+    # Decrypt the file if a password is provided
+    if password:
+        decrypted_file = decrypt_excel(excel_file, password)
+        df = pd.read_excel(decrypted_file, sheet_name=sheet_name, engine='openpyxl', skiprows=lambda x: x not in row_range)
+    else:
+        # Determine the file format and set the appropriate engine
+        if excel_file.endswith('.xlsx'):
+            engine = 'openpyxl'
+        elif excel_file.endswith('.xls'):
+            engine = 'xlrd'
+        else:
+            raise ValueError("Unsupported file format. Please provide an .xls or .xlsx file.")
+        
+        # Read the specified rows and columns from the Excel file
+        df = pd.read_excel(excel_file, sheet_name=sheet_name, engine=engine, skiprows=lambda x: x not in row_range)
+    
+    # Select specified columns
+    df = df.iloc[:, column_range]
+
+    # Create a MySQL-compatible SQL file
+    with open(output_sql_file, 'w', encoding='utf-8') as f:
+        # Write the CREATE TABLE statement
+        create_table_statement = f"CREATE TABLE `{table_name}` (\n"
+        for column in df.columns:
+            create_table_statement += f"`{column}` TEXT,\n"
+        create_table_statement = create_table_statement.rstrip(',\n') + "\n);\n"
+        f.write(create_table_statement)
+        
+        # Write the INSERT INTO statements
+        for _, row in df.iterrows():
+            insert_statement = f"INSERT INTO `{table_name}` VALUES ("
+            for value in row:
+                escaped_value = escape_sql_value(value)
+                insert_statement += f"'{escaped_value}',"
+            insert_statement = insert_statement.rstrip(',') + ");\n"
+            f.write(insert_statement)
+
+# Parameters
+excel_file = 'SPI Master List with PAF Monitoring 2024.xlsx'  # or 'your_excel_file.xls'
+sheet_name = 'UPDATED LIST'  # or any specific sheet name
+table_name = 'list'
+output_sql_file = 'output-2.sql'
+row_range = range(7, 114)  # Specify the range of rows you want (e.g., rows 5 to 14)
+column_range = range(0, 68)  # Specify the range of columns you want (e.g., columns B to D)
+password = 'Spi2022.'  # Set to None if the file is not password-protected
+
+# Convert Excel to SQL
+excel_to_sql(excel_file, sheet_name, table_name, output_sql_file, row_range, column_range, password)
